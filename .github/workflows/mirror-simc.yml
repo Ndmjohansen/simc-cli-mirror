@@ -1,0 +1,48 @@
+name: mirror simc nightly
+
+on:
+  schedule:
+    - cron: "30 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mirror-simc
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq p7zip-full
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          BASE="http://downloads.simulationcraft.org/nightly/"
+          # ?C=M;O=D sorts the directory listing by mtime descending
+          NAME=$(curl -fsSL "$BASE?C=M;O=D" \
+            | grep -oE 'simc-[0-9]+\.[0-9]+\.[0-9a-f]+-win64\.7z' | head -n1)
+          [ -n "$NAME" ] || { echo "::error::no nightly matched"; exit 1; }
+          TAG="${NAME%-win64.7z}"
+
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists."
+            exit 0
+          fi
+
+          curl -fsSL "$BASE$NAME" -o "$NAME"
+          # archive's top-level dir is simc-<ver>-win64/, hence the wildcard
+          7z e "$NAME" 'simc-*-win64/simc.exe' -y -aoa
+          # Ship zipped — raw simc.exe is ~113 MB, zip is ~15 MB
+          zip -9 simc.zip simc.exe
+
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$TAG" \
+            --notes "Unmodified upstream simc.exe from $BASE$NAME (extract simc.zip).
+
+          Source: https://github.com/simulationcraft/simc
+          License: GPLv3 (see LICENSE)" \
+            simc.zip
