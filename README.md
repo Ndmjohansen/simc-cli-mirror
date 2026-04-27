@@ -7,16 +7,16 @@ SHA256 (computed and exposed by GitHub for every release asset).
 
 A daily Actions job grabs the latest `simc-*-win64.7z`, extracts `simc.exe`,
 and publishes a release tagged `simc-<version>-<sha>`. The binary is
-byte-identical to the upstream archive — we don't modify, rebuild, sign, or
-otherwise touch it.
+byte-identical to the upstream archive — not modified, rebuilt, signed, or
+otherwise touched.
 
 simc is GPLv3. See `LICENSE`. Upstream: https://github.com/simulationcraft/simc.
 
 ## Each release
 
-One asset: `simc.zip` containing a single file, `simc.exe` (~113 MB raw,
-~15 MB zipped). The release notes link to the exact upstream archive URL
-we mirrored from. The asset SHA256 is shown next to it on the release page
+One asset: `simc.zip` containing a single file, `simc.exe`. 
+The release notes link to the exact upstream archive URL mirrored from. 
+The asset SHA256 is shown next to it on the release page
 and in the release-assets API (`digest` field).
 
 ## Verifying
