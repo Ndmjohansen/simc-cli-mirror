@@ -1,0 +1,5 @@
+# Local scratch from manual experimentation. CI does the real work.
+*.7z
+simc.exe
+simc-x86_64-pc-windows-msvc.exe*
+UPSTREAM_URL.txt

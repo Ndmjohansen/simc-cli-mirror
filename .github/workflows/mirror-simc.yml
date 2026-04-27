@@ -1,0 +1,136 @@
+name: mirror simc nightly
+
+# Pulls the most recent simc-*-win64.7z from the upstream nightly directory,
+# extracts simc.exe, computes SHA256, and publishes a GitHub Release.
+#
+# Idempotent: if the release tag for that nightly already exists we exit 0
+# without doing anything. Driven by daily cron + manual dispatch.
+
+on:
+  schedule:
+    # 06:30 UTC daily — well after the simc team's typical nightly cut.
+    - cron: "30 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write   # required by gh release create
+
+concurrency:
+  group: mirror-simc
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout (for README link in release notes)
+        uses: actions/checkout@v4
+
+      - name: Install p7zip
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq p7zip-full
+
+      - name: Find latest upstream nightly
+        id: find
+        run: |
+          set -euo pipefail
+          LISTING="http://downloads.simulationcraft.org/nightly/?C=M;O=D"
+          NIGHTLY_BASE="http://downloads.simulationcraft.org/nightly/"
+          # Scrape the directory listing. ?C=M;O=D sorts by mod date desc, so
+          # the first regex match is the most recent file.
+          NAME=$(curl -fsSL "$LISTING" \
+            | grep -oE 'simc-[0-9]+\.[0-9]+\.[0-9a-f]+-win64\.7z' \
+            | head -n1)
+          if [ -z "$NAME" ]; then
+            echo "::error::no nightly archive matched expected pattern"
+            exit 1
+          fi
+          # Tag = filename minus the -win64.7z suffix (e.g. simc-1201.01.8467119abc).
+          TAG="${NAME%-win64.7z}"
+          echo "name=$NAME"   >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG"     >> "$GITHUB_OUTPUT"
+          echo "url=$NIGHTLY_BASE$NAME" >> "$GITHUB_OUTPUT"
+          echo "Latest upstream: $NAME"
+          echo "Tag will be:    $TAG"
+
+      - name: Skip if release already exists
+        id: gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.find.outputs.tag }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; nothing to do."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download upstream archive
+        if: steps.gate.outputs.skip != 'true'
+        env:
+          URL: ${{ steps.find.outputs.url }}
+          NAME: ${{ steps.find.outputs.name }}
+        run: |
+          set -euo pipefail
+          curl -fsSL "$URL" -o "$NAME"
+          ls -lh "$NAME"
+
+      - name: Extract simc.exe
+        if: steps.gate.outputs.skip != 'true'
+        env:
+          NAME: ${{ steps.find.outputs.name }}
+        run: |
+          set -euo pipefail
+          # Archive contains a single top-level directory like
+          # simc-1201.01.<sha>-win64/. -y auto-confirms; -aoa overwrites.
+          7z e "$NAME" 'simc-*-win64/simc.exe' -y -aoa
+          test -f simc.exe
+          # Tauri sidecar naming.
+          mv simc.exe simc-x86_64-pc-windows-msvc.exe
+          ls -lh simc-x86_64-pc-windows-msvc.exe
+
+      - name: Compute SHA256
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          sha256sum simc-x86_64-pc-windows-msvc.exe \
+            | tee simc-x86_64-pc-windows-msvc.exe.sha256
+
+      - name: Write upstream URL marker
+        if: steps.gate.outputs.skip != 'true'
+        env:
+          URL: ${{ steps.find.outputs.url }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$URL" > UPSTREAM_URL.txt
+          cat UPSTREAM_URL.txt
+
+      - name: Publish release
+        if: steps.gate.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG:  ${{ steps.find.outputs.tag }}
+          URL:  ${{ steps.find.outputs.url }}
+          NAME: ${{ steps.find.outputs.name }}
+        run: |
+          set -euo pipefail
+          NOTES=$(cat <<EOF
+          Unmodified upstream simc.exe extracted from $URL.
+
+          - Source: <https://github.com/simulationcraft/simc>
+          - Upstream archive: \`$NAME\`
+          - License: GPLv3 (see LICENSE in this repo)
+
+          Verify the binary independently by downloading the upstream archive,
+          extracting \`simc.exe\` from it, and running \`sha256sum\`. The hash
+          must match the value in \`simc-x86_64-pc-windows-msvc.exe.sha256\`.
+          EOF
+          )
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$TAG" \
+            --notes "$NOTES" \
+            simc-x86_64-pc-windows-msvc.exe \
+            simc-x86_64-pc-windows-msvc.exe.sha256 \
+            UPSTREAM_URL.txt
